@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (MessageView, RegisterView, LoginView, LogoutView, 
                    UserProfileView, DashboardView, ScholarshipApplicationView,
-                   AdminDashboardView, AdminApplicationsView, AdminStudentsView)
+                   AdminDashboardView, AdminApplicationsView, AdminStudentsView,
+                   ChangePasswordView)
 
 urlpatterns = [
     path('messages/', MessageView.as_view(), name='messages'),
@@ -9,6 +10,7 @@ urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='login'),
     path('auth/logout/', LogoutView.as_view(), name='logout'),
     path('auth/profile/', UserProfileView.as_view(), name='profile'),
+    path('auth/change-password/', ChangePasswordView.as_view(), name='change_password'),
     path('dashboard/', DashboardView.as_view(), name='dashboard'),
     path('scholarship/apply/', ScholarshipApplicationView.as_view(), name='scholarship_apply'),
     path('scholarship/applications/', ScholarshipApplicationView.as_view(), name='scholarship_applications'),

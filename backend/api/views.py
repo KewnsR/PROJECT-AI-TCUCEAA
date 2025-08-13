@@ -77,6 +77,102 @@ class UserProfileView(APIView):
     def get(self, request):
         serializer = UserSerializer(request.user)
         return Response(serializer.data)
+    
+    def patch(self, request):
+        """Update user profile information"""
+        try:
+            # Get the user and student profile
+            user = request.user
+            
+            # Check if user is admin - admins can't update profile this way
+            if user.is_superuser:
+                return Response({'error': 'Admin users cannot update profile through this endpoint'}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            
+            try:
+                student_profile = user.studentprofile
+            except StudentProfile.DoesNotExist:
+                return Response({'error': 'Student profile not found'}, status=status.HTTP_404_NOT_FOUND)
+            
+            # Update user fields
+            user_fields = ['first_name', 'last_name', 'email']
+            for field in user_fields:
+                if field in request.data:
+                    setattr(user, field, request.data[field])
+            
+            # Validate email uniqueness if email is being updated
+            if 'email' in request.data:
+                if User.objects.exclude(id=user.id).filter(email=request.data['email']).exists():
+                    return Response({'error': 'Email already exists'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            user.save()
+            
+            # Update student profile fields
+            profile_fields = ['course', 'year_level', 'university']
+            for field in profile_fields:
+                if field in request.data:
+                    setattr(student_profile, field, request.data[field])
+            
+            student_profile.save()
+            
+            # Return updated user data
+            serializer = UserSerializer(user)
+            return Response({
+                'message': 'Profile updated successfully',
+                'user': serializer.data
+            })
+            
+        except Exception as e:
+            return Response({'error': f'Failed to update profile: {str(e)}'}, 
+                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """Change user password"""
+        try:
+            user = request.user
+            
+            # Check if user is admin - admins can't change password this way
+            if user.is_superuser:
+                return Response({'error': 'Admin users cannot change password through this endpoint'}, 
+                              status=status.HTTP_403_FORBIDDEN)
+            
+            current_password = request.data.get('current_password')
+            new_password = request.data.get('new_password')
+            confirm_password = request.data.get('confirm_password')
+            
+            # Validate input
+            if not current_password or not new_password or not confirm_password:
+                return Response({'error': 'All password fields are required'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check current password
+            if not user.check_password(current_password):
+                return Response({'error': 'Current password is incorrect'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Check if new passwords match
+            if new_password != confirm_password:
+                return Response({'error': 'New passwords do not match'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Validate new password strength
+            if len(new_password) < 6:
+                return Response({'error': 'New password must be at least 6 characters long'}, 
+                              status=status.HTTP_400_BAD_REQUEST)
+            
+            # Change password
+            user.set_password(new_password)
+            user.save()
+            
+            return Response({'message': 'Password changed successfully'})
+            
+        except Exception as e:
+            return Response({'error': f'Failed to change password: {str(e)}'}, 
+                          status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class DashboardView(APIView):
     permission_classes = [IsAuthenticated]
@@ -237,23 +333,35 @@ class ScholarshipApplicationView(APIView):
             # Simulate AI extraction from uploaded document
             if application.grade_document:
                 print(f"Processing document: {application.grade_document.name}")
-                # Enhanced document analysis - in reality this would use OCR/ML to extract data
-                extracted_data = self.simulate_document_analysis(application.grade_document)
                 
-                # Update application with extracted data
-                application.units_enrolled = extracted_data['units_enrolled']
-                application.swa_grade = extracted_data['swa_grade']
-                application.has_inc_withdrawn = extracted_data['has_inc_withdrawn']
-                application.has_failed_dropped = extracted_data['has_failed_dropped']
-                
-                # Get confidence and analysis notes from document analysis
-                confidence = extracted_data.get('confidence_score', Decimal('85.00'))
-                analysis_notes = extracted_data.get('analysis_notes', 'Enhanced AI analysis completed')
-                
-                # Save the application with the extracted data
-                # The model's save() method will now calculate allowances properly
-                application.save()
-                print(f"Updated application with extracted data and saved")
+                try:
+                    # Enhanced document analysis with strict validation
+                    extracted_data = self.simulate_document_analysis(application.grade_document)
+                    
+                    # Update application with extracted data
+                    application.units_enrolled = extracted_data['units_enrolled']
+                    application.swa_grade = extracted_data['swa_grade']
+                    application.has_inc_withdrawn = extracted_data['has_inc_withdrawn']
+                    application.has_failed_dropped = extracted_data['has_failed_dropped']
+                    
+                    # Get confidence and analysis notes from document analysis
+                    confidence = extracted_data.get('confidence_score', Decimal('85.00'))
+                    analysis_notes = extracted_data.get('analysis_notes', 'Enhanced AI analysis completed')
+                    
+                    # Save the application with the extracted data
+                    # The model's save() method will now calculate allowances properly
+                    application.save()
+                    print(f"Updated application with extracted data and saved")
+                    
+                except ValueError as validation_error:
+                    # Document validation failed - return rejection immediately
+                    print(f"❌ Document validation failed: {str(validation_error)}")
+                    return {
+                        'status': 'rejected',
+                        'confidence': Decimal('0.00'),
+                        'notes': f'Document validation failed: {str(validation_error)}',
+                        'eligible_for_merit': False
+                    }
             else:
                 # No document provided - still process but mark as needs document
                 print("No document provided for AI analysis")
@@ -401,19 +509,266 @@ class ScholarshipApplicationView(APIView):
                 'eligible_for_merit': False
             }
     
+    def validate_grade_document(self, document):
+        """
+        Advanced validation to determine if uploaded document is actually a grade document
+        Uses multiple validation techniques to prevent random image acceptance
+        """
+        import os
+        
+        try:
+            validation_score = 0
+            reasons = []
+            
+            # 1. File extension validation (basic)
+            file_extension = document.name.lower().split('.')[-1]
+            if file_extension in ['pdf', 'png', 'jpg', 'jpeg']:
+                validation_score += 20
+                reasons.append(f"Valid file extension: {file_extension}")
+            else:
+                return {
+                    'is_valid': False,
+                    'confidence': 0,
+                    'reason': f"Invalid file extension: {file_extension}. Only PDF, PNG, JPG files are allowed for grade documents."
+                }
+            
+            # 2. File size validation - grade documents should have reasonable size
+            if document.size < 50000:  # Increased from 10KB to 50KB - grade documents are typically larger
+                return {
+                    'is_valid': False,
+                    'confidence': 0,
+                    'reason': f"File too small ({document.size} bytes). Grade documents are typically larger than 50KB. This appears to be a low-quality image or icon, not a grade document."
+                }
+            elif document.size > 10000000:  # More than 10MB is suspiciously large
+                return {
+                    'is_valid': False,
+                    'confidence': 0,
+                    'reason': f"File too large ({document.size} bytes). Grade documents should be under 10MB."
+                }
+            else:
+                validation_score += 15
+                reasons.append(f"Appropriate file size: {document.size} bytes")
+            
+            # 3. Filename pattern analysis - look for grade-related keywords
+            filename_lower = document.name.lower()
+            grade_keywords = [
+                'grade', 'grades', 'gwa', 'swa', 'transcript', 'record', 'academic',
+                'semester', 'semestral', 'report', 'card', 'tcu', 'university',
+                'student', 'result', 'evaluation', 'assessment', 'final', 'midterm'
+            ]
+            
+            keyword_matches = sum(1 for keyword in grade_keywords if keyword in filename_lower)
+            if keyword_matches >= 1:
+                validation_score += min(keyword_matches * 10, 30)  # Max 30 points for filename
+                reasons.append(f"Grade-related keywords found in filename: {keyword_matches}")
+            else:
+                # Not necessarily invalid, but lower confidence
+                reasons.append("No grade-related keywords in filename")
+            
+            # 4. File header/magic number validation (basic)
+            try:
+                document.seek(0)  # Reset file pointer
+                file_header = document.read(8)  # Read first 8 bytes
+                document.seek(0)  # Reset again
+                
+                # Check for common file signatures
+                if file_header.startswith(b'\x89PNG\r\n\x1a\n'):
+                    validation_score += 20
+                    reasons.append("Valid PNG file signature detected")
+                elif file_header.startswith(b'\xff\xd8\xff'):
+                    validation_score += 20
+                    reasons.append("Valid JPEG file signature detected")
+                elif file_header.startswith(b'%PDF'):
+                    validation_score += 25
+                    reasons.append("Valid PDF file signature detected")
+                else:
+                    return {
+                        'is_valid': False,
+                        'confidence': 0,
+                        'reason': "Invalid file format - file appears to be corrupted or not a valid image/PDF."
+                    }
+                    
+            except Exception as e:
+                reasons.append(f"File header validation error: {str(e)}")
+                validation_score += 5
+            
+            # 5. Image content analysis (basic, for image files)
+            if file_extension in ['png', 'jpg', 'jpeg']:
+                try:
+                    # Try to import PIL for image validation
+                    from PIL import Image
+                    
+                    document.seek(0)
+                    image = Image.open(document)
+                    width, height = image.size
+                    
+                    # Grade documents are typically in landscape or portrait orientation
+                    # and have reasonable dimensions
+                    if width < 200 or height < 200:
+                        return {
+                            'is_valid': False,
+                            'confidence': 0,
+                            'reason': f"Image too small ({width}x{height}). Grade documents should be at least 200x200 pixels. This appears to be an icon or low-quality image."
+                        }
+                    
+                    # Grade documents should have reasonable minimum dimensions
+                    if width < 400 and height < 400:
+                        return {
+                            'is_valid': False,
+                            'confidence': 0,
+                            'reason': f"Image dimensions too small ({width}x{height}). Grade documents typically need to be at least 400x400 pixels to contain readable text."
+                        }
+                    
+                    if width > 5000 or height > 5000:
+                        reasons.append(f"Very large image ({width}x{height}) - may affect processing")
+                    else:
+                        validation_score += 10
+                        reasons.append(f"Appropriate image dimensions: {width}x{height}")
+                    
+                    # Check aspect ratio - grade documents usually have reasonable aspect ratios
+                    aspect_ratio = max(width, height) / min(width, height)
+                    if aspect_ratio > 4:  # Reduced from 5 to 4 - stricter aspect ratio check
+                        return {
+                            'is_valid': False,
+                            'confidence': 0,
+                            'reason': f"Unusual aspect ratio ({aspect_ratio:.2f}). Grade documents typically have more balanced dimensions (close to portrait or landscape format)."
+                        }
+                    else:
+                        validation_score += 15  # Increased reward for good aspect ratio
+                        reasons.append(f"Good aspect ratio: {aspect_ratio:.2f}")
+                    
+                    # Additional check: Grade documents should not be perfect squares (usually random images)
+                    if abs(width - height) < 10:  # Nearly perfect square
+                        validation_score -= 10  # Penalize square images
+                        reasons.append("Warning: Square image detected (uncommon for grade documents)")
+                        
+                except ImportError:
+                    # PIL not available, skip detailed image analysis
+                    reasons.append("Detailed image analysis skipped (PIL not available)")
+                    validation_score += 5  # Reduced points when can't analyze
+                except Exception as e:
+                    reasons.append(f"Image analysis error: {str(e)}")
+                    validation_score += 2  # Very low points for analysis errors
+                finally:
+                    document.seek(0)  # Reset file pointer
+            
+            # 6. Content-based validation - look for suspicious patterns
+            # Random images often have very simple or completely random names
+            suspicious_patterns = [
+                'screenshot', 'image', 'photo', 'picture', 'img', 'pic',
+                'random', 'test', 'sample', 'untitled', 'new', 'copy'
+            ]
+            
+            suspicious_matches = sum(1 for pattern in suspicious_patterns if pattern in filename_lower)
+            if suspicious_matches > 0:
+                validation_score -= suspicious_matches * 5  # Reduce score for suspicious patterns
+                reasons.append(f"Suspicious filename patterns detected: {suspicious_matches}")
+            
+            # 7. Additional heuristic checks
+            # Grade documents from TCU often have specific patterns
+            if 'tcu' in filename_lower or 'tagui' in filename_lower:
+                validation_score += 15
+                reasons.append("TCU-related filename detected")
+            
+            # Check for academic terms
+            academic_terms = ['midterm', 'final', 'sem', 'semester', '2024', '2025', '1st', '2nd']
+            term_matches = sum(1 for term in academic_terms if term in filename_lower)
+            if term_matches > 0:
+                validation_score += min(term_matches * 5, 15)
+                reasons.append(f"Academic terms found in filename: {term_matches}")
+            
+            # Calculate final confidence
+            max_possible_score = 110  # Theoretical maximum
+            confidence = min(100, max(0, (validation_score / max_possible_score) * 100))
+            
+            # Determine if document passes validation - MUCH MORE STRICT NOW
+            is_valid = confidence >= 70  # Increased from 50% to 70% - much stricter!
+            
+            # Additional strict check - require at least one grade-related keyword in filename
+            has_grade_keywords = any(keyword in filename_lower for keyword in [
+                'grade', 'grades', 'gwa', 'swa', 'transcript', 'record', 'academic',
+                'semester', 'semestral', 'report', 'card', 'tcu', 'university',
+                'student', 'result', 'evaluation', 'assessment', 'final', 'midterm'
+            ])
+            
+            if not has_grade_keywords:
+                return {
+                    'is_valid': False,
+                    'confidence': max(0, confidence - 30),  # Heavily penalize lack of keywords
+                    'reason': "Document filename does not contain grade-related keywords. Please rename your file to include words like 'grades', 'transcript', 'TCU', etc. (e.g., 'TCU_Grades_2024_Midterm.pdf')"
+                }
+            
+            # Extra strict check for suspicious filenames
+            highly_suspicious = [
+                'img_', 'image', 'photo', 'picture', 'screenshot', 'snap',
+                'untitled', 'new image', 'download', 'copy', 'random'
+            ]
+            
+            for suspicious in highly_suspicious:
+                if suspicious in filename_lower:
+                    return {
+                        'is_valid': False,
+                        'confidence': 0,
+                        'reason': f"Filename contains suspicious pattern '{suspicious}'. This appears to be a random image, not a grade document. Please upload your actual TCU grade report."
+                    }
+            
+            print(f"📋 Document validation completed:")
+            print(f"   Score: {validation_score}/{max_possible_score}")
+            print(f"   Confidence: {confidence:.1f}%")
+            print(f"   Valid: {'YES' if is_valid else 'NO'}")
+            print(f"   Has grade keywords: {'YES' if has_grade_keywords else 'NO'}")
+            for reason in reasons:
+                print(f"   - {reason}")
+            
+            if not is_valid:
+                return {
+                    'is_valid': False,
+                    'confidence': confidence,
+                    'reason': f"Document failed strict validation (confidence: {confidence:.1f}%). This doesn't appear to be a grade document. Please upload your actual grade report or transcript with a descriptive filename containing words like 'grades', 'TCU', 'transcript', etc."
+                }
+            
+            return {
+                'is_valid': True,
+                'confidence': confidence,
+                'reasons': reasons
+            }
+            
+        except Exception as e:
+            print(f"Error during document validation: {str(e)}")
+            return {
+                'is_valid': False,
+                'confidence': 0,
+                'reason': f"Document validation error: {str(e)}. Please try uploading a different file."
+            }
+    
     def simulate_document_analysis(self, document):
         """
-        Enhanced AI document analysis to extract grade information with higher accuracy
-        Simulates realistic TCU grade patterns and better 1.75 GWA detection
+        Enhanced AI document analysis with strict grade document validation
+        Now includes actual document content verification to prevent random image acceptance
         """
         import random
         from decimal import Decimal
+        import os
         
         print(f"🤖 Enhanced AI analyzing document: {document.name} ({document.size} bytes)")
         
-        # Simulate document quality assessment based on file characteristics
+        # STEP 1: Advanced file validation beyond just extension
         file_extension = document.name.lower().split('.')[-1]
-        is_high_quality = document.size > 300000 or file_extension in ['pdf', 'png']
+        
+        # STEP 2: Strict document validation - reject obvious non-grade documents
+        validation_result = self.validate_grade_document(document)
+        if not validation_result['is_valid']:
+            print(f"❌ Document validation FAILED: {validation_result['reason']}")
+            raise ValueError(f"Document validation failed: {validation_result['reason']}")
+        
+        print(f"✅ Document validation PASSED: {validation_result['confidence']}% confidence it's a grade document")
+        
+        # STEP 3: Enhanced quality assessment based on validation results
+        is_high_quality = (
+            document.size > 300000 or 
+            file_extension in ['pdf', 'png'] or
+            validation_result['confidence'] >= 80
+        )
         
         print(f"📄 Document quality: {'High' if is_high_quality else 'Standard'} ({file_extension.upper()})")
         

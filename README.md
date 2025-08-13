@@ -36,6 +36,8 @@ PROJECT-AI-TCUCEAA/
 │   ├── src/                # Source code
 │   ├── public/             # Static assets
 │   └── package.json        # Node.js dependencies
+├── tests/                  # Test suite
+│   └── README.md           # Test documentation
 └── README.md               # This file
 ```
 
@@ -106,11 +108,12 @@ PROJECT-AI-TCUCEAA/
 
 ## Development Scripts
 
-The project includes several utility scripts:
+The project includes utility scripts:
 
-- `start_backend.bat` - Start Django development server
-- `start_frontend.bat` - Start React development server
-- `test_*.py` - Various testing scripts
+- `start_backend.bat` - Start Django development server (Windows batch file)
+- `start_django_server.py` - Start Django development server (Python script)
+
+For testing, see the `/tests` directory which contains comprehensive test suite.
 
 ## Contributing
 

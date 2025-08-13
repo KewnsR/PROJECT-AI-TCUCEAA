@@ -16,7 +16,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [dashboardData, setDashboardData] = useState(null);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  const [currentView, setCurrentView] = useState('dashboard'); // dashboard, apply, applications, admin-dashboard, admin-applications, admin-students
+  const [currentView, setCurrentView] = useState('dashboard'); // dashboard, apply, applications, settings, admin-dashboard, admin-applications, admin-students
   const [gradeFormData, setGradeFormData] = useState({
     academic_year: '',
     semester: '',
@@ -31,8 +31,30 @@ function App() {
   const [adminData, setAdminData] = useState(null);
   const [adminApplications, setAdminApplications] = useState([]);
   const [adminApplicationsLoading, setAdminApplicationsLoading] = useState(false);
+  const [adminStudents, setAdminStudents] = useState([]);
+  const [adminStudentsLoading, setAdminStudentsLoading] = useState(false);
+  const [studentsSearchTerm, setStudentsSearchTerm] = useState('');
+  const [studentsFilterStatus, setStudentsFilterStatus] = useState('all');
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [buttonLoading, setButtonLoading] = useState({});
+  
+  // Settings state
+  const [profileData, setProfileData] = useState({
+    first_name: '',
+    last_name: '',
+    email: '',
+    course: '',
+    year_level: '',
+    university: ''
+  });
+  const [passwordData, setPasswordData] = useState({
+    current_password: '',
+    new_password: '',
+    confirm_password: ''
+  });
+  const [settingsMessage, setSettingsMessage] = useState('');
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
 
   // Handle form input changes
   const handleChange = (e) => {
@@ -48,6 +70,22 @@ function App() {
     setGradeFormData({
       ...gradeFormData,
       [name]: type === 'checkbox' ? checked : value
+    });
+  };
+
+  // Handle profile form input changes
+  const handleProfileChange = (e) => {
+    setProfileData({
+      ...profileData,
+      [e.target.name]: e.target.value
+    });
+  };
+
+  // Handle password form input changes
+  const handlePasswordChange = (e) => {
+    setPasswordData({
+      ...passwordData,
+      [e.target.name]: e.target.value
     });
   };
 
@@ -227,6 +265,18 @@ function App() {
         localStorage.setItem('token', data.token);
         setMessage(data.message);
         
+        // Initialize profile data for settings
+        if (data.user.student_profile) {
+          setProfileData({
+            first_name: data.user.first_name || '',
+            last_name: data.user.last_name || '',
+            email: data.user.email || '',
+            course: data.user.student_profile.course || '',
+            year_level: data.user.student_profile.year_level || '',
+            university: data.user.student_profile.university || ''
+          });
+        }
+        
         // Check if user is admin
         setIsAdmin(data.user.is_superuser || false);
         
@@ -274,6 +324,19 @@ function App() {
         setUser(data.user);
         localStorage.setItem('token', data.token);
         setMessage(data.message);
+        
+        // Initialize profile data for settings
+        if (data.user.student_profile) {
+          setProfileData({
+            first_name: data.user.first_name || '',
+            last_name: data.user.last_name || '',
+            email: data.user.email || '',
+            course: data.user.student_profile.course || '',
+            year_level: data.user.student_profile.year_level || '',
+            university: data.user.student_profile.university || ''
+          });
+        }
+        
         // Fetch dashboard data after successful registration
         await fetchDashboardData(data.token);
       } else {
@@ -303,6 +366,17 @@ function App() {
       fetchAdminApplications(token).then(data => {
         setAdminApplications(data);
         setAdminApplicationsLoading(false);
+      });
+    }
+  }, [currentView, token, isAdmin]);
+
+  // Load admin students when switching to admin students view
+  React.useEffect(() => {
+    if (currentView === 'admin-students' && token && isAdmin && !adminStudentsLoading) {
+      setAdminStudentsLoading(true);
+      fetchAdminStudents(token).then(data => {
+        setAdminStudents(data);
+        setAdminStudentsLoading(false);
       });
     }
   }, [currentView, token, isAdmin]);
@@ -384,6 +458,24 @@ function App() {
       }
     } catch (error) {
       console.error('Error fetching admin applications:', error);
+    }
+    return [];
+  };
+
+  // Fetch admin students
+  const fetchAdminStudents = async (authToken) => {
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/admin/students/', {
+        headers: {
+          'Authorization': `Token ${authToken}`,
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        return data;
+      }
+    } catch (error) {
+      console.error('Error fetching admin students:', error);
     }
     return [];
   };
@@ -546,6 +638,85 @@ function App() {
     setShowLogoutModal(false);
   };
 
+  // Handle profile update
+  const handleProfileUpdate = async (e) => {
+    e.preventDefault();
+    setIsUpdatingProfile(true);
+    setSettingsMessage('');
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/auth/profile/', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${token}`,
+        },
+        body: JSON.stringify(profileData)
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setUser(data.user);
+        setSettingsMessage('✅ Profile updated successfully!');
+        // Refresh dashboard data
+        await fetchDashboardData(token);
+      } else {
+        setSettingsMessage(`❌ ${data.error || 'Failed to update profile'}`);
+      }
+    } catch (error) {
+      setSettingsMessage('❌ Network error. Please try again.');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
+  };
+
+  // Handle password change
+  const handlePasswordChange_Submit = async (e) => {
+    e.preventDefault();
+    setIsChangingPassword(true);
+    setSettingsMessage('');
+
+    // Client-side validation
+    if (passwordData.new_password !== passwordData.confirm_password) {
+      setSettingsMessage('❌ New passwords do not match');
+      setIsChangingPassword(false);
+      return;
+    }
+
+    if (passwordData.new_password.length < 6) {
+      setSettingsMessage('❌ New password must be at least 6 characters long');
+      setIsChangingPassword(false);
+      return;
+    }
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/auth/change-password/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Token ${token}`,
+        },
+        body: JSON.stringify(passwordData)
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        setSettingsMessage('✅ Password changed successfully!');
+        setPasswordData({
+          current_password: '',
+          new_password: '',
+          confirm_password: ''
+        });
+      } else {
+        setSettingsMessage(`❌ ${data.error || 'Failed to change password'}`);
+      }
+    } catch (error) {
+      setSettingsMessage('❌ Network error. Please try again.');
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   // Check if user is already logged in
   React.useEffect(() => {
     if (token) {
@@ -563,6 +734,19 @@ function App() {
       .then(data => {
         setUser(data);
         setIsAdmin(data.is_superuser || false);
+        
+        // Initialize profile data for settings
+        if (data.student_profile) {
+          setProfileData({
+            first_name: data.first_name || '',
+            last_name: data.last_name || '',
+            email: data.email || '',
+            course: data.student_profile.course || '',
+            year_level: data.student_profile.year_level || '',
+            university: data.student_profile.university || ''
+          });
+        }
+        
         if (data.is_superuser) {
           setCurrentView('admin-dashboard');
           fetchAdminDashboardData(token);
@@ -868,6 +1052,40 @@ function App() {
           <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
             Upload Grade Document *
           </label>
+          
+          {/* Important Notice */}
+          <div style={{
+            backgroundColor: '#fff5f5',
+            border: '2px solid #fed7d7',
+            borderRadius: '8px',
+            padding: '15px',
+            marginBottom: '15px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+              <span style={{ fontSize: '20px' }}>⚠️</span>
+              <h4 style={{ color: '#c53030', margin: '0', fontSize: '16px' }}>
+                STRICT VALIDATION: Upload ACTUAL Grade Documents Only
+              </h4>
+            </div>
+            <div style={{ color: '#e53e3e', fontSize: '14px' }}>
+              <p style={{ margin: '0 0 8px 0' }}>
+                <strong>✅ ACCEPTED:</strong> Official TCU grade reports, transcripts, or semester evaluation documents
+              </p>
+              <p style={{ margin: '0 0 8px 0' }}>
+                <strong>❌ REJECTED:</strong> Random images, screenshots, photos, or non-grade documents
+              </p>
+              <p style={{ margin: '0 0 8px 0' }}>
+                <strong>📝 FILENAME REQUIREMENTS:</strong> Must contain grade-related words like: 'grades', 'transcript', 'TCU', 'semester', 'academic', etc.
+              </p>
+              <p style={{ margin: '0 0 8px 0' }}>
+                <strong>� SIZE REQUIREMENTS:</strong> Minimum 50KB file size and 400x400 pixel dimensions
+              </p>
+              <p style={{ margin: '0', fontSize: '12px' }}>
+                <strong>💡 EXAMPLES:</strong> "TCU_Grades_2024_Midterm.pdf", "Semester_Report_Final.png", "Academic_Transcript.jpg"
+              </p>
+            </div>
+          </div>
+          
           <div style={{
             border: '2px dashed #cbd5e0',
             borderRadius: '8px',
@@ -883,11 +1101,17 @@ function App() {
             <p style={{ color: '#4a5568', margin: '0 0 5px 0' }}>
               {gradeFormData.grade_document 
                 ? `Selected: ${gradeFormData.grade_document.name}`
-                : 'Click to upload or drag and drop'
+                : 'Click to upload your ACTUAL grade document'
               }
             </p>
-            <p style={{ color: '#718096', fontSize: '14px', margin: '0' }}>
-              PDF, JPG, PNG files (Max 5MB)
+            <p style={{ color: '#718096', fontSize: '14px', margin: '0 0 5px 0' }}>
+              PDF, JPG, PNG files (Min 50KB, Max 5MB)
+            </p>
+            <p style={{ color: '#e53e3e', fontSize: '12px', margin: '0 0 5px 0', fontWeight: 'bold' }}>
+              Only upload official TCU grade documents!
+            </p>
+            <p style={{ color: '#9f7aea', fontSize: '11px', margin: '0', fontStyle: 'italic' }}>
+              Name your file with grade keywords: "TCU_Grades_2024.pdf"
             </p>
             <input
               type="file"
@@ -914,17 +1138,27 @@ function App() {
           border: '1px solid #bee3f8'
         }}>
           <h4 style={{ color: '#2b6cb0', margin: '0 0 10px 0', fontSize: '16px' }}>
-            🤖 AI Verification Process
+            🤖 Enhanced AI Document Verification
           </h4>
           <p style={{ color: '#3182ce', fontSize: '14px', margin: '0 0 10px 0' }}>
-            Our AI system will automatically analyze your uploaded document to:
+            Our advanced AI system performs comprehensive document validation:
           </p>
-          <ul style={{ color: '#3182ce', fontSize: '14px', margin: '0', paddingLeft: '20px' }}>
-            <li>Extract units enrolled and SWA grade information</li>
-            <li>Verify document authenticity and TCU formatting</li>
-            <li>Calculate scholarship allowances (Base: ₱5,000 + Merit: up to ₱5,000)</li>
-            <li>Determine eligibility based on academic performance</li>
+          <ul style={{ color: '#3182ce', fontSize: '14px', margin: '0 0 15px 0', paddingLeft: '20px' }}>
+            <li><strong>Document Authentication:</strong> Verifies the file is actually a grade document</li>
+            <li><strong>Content Analysis:</strong> Extracts units enrolled and SWA grade information</li>
+            <li><strong>Format Validation:</strong> Ensures proper TCU document structure</li>
+            <li><strong>Eligibility Calculation:</strong> Determines scholarship allowances automatically</li>
           </ul>
+          <div style={{
+            backgroundColor: '#e6fffa',
+            padding: '12px',
+            borderRadius: '6px',
+            border: '1px solid #4fd1c7'
+          }}>
+            <p style={{ color: '#234e52', fontSize: '13px', margin: '0', fontWeight: '500' }}>
+              🛡️ <strong>Anti-Fraud Protection:</strong> Random images or non-grade documents will be automatically rejected to maintain system integrity.
+            </p>
+          </div>
         </div>
 
         <button
@@ -951,6 +1185,389 @@ function App() {
           {isSubmitting ? 'Submitting for AI Verification...' : 'Submit for AI Verification'}
         </button>
       </form>
+    </div>
+  );
+
+  // Render Settings
+  const renderSettings = () => (
+    <div style={{ padding: '20px' }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '15px',
+        marginBottom: '30px'
+      }}>
+        <div style={{
+          width: '40px',
+          height: '40px',
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '20px',
+          color: 'white'
+        }}>
+          ⚙️
+        </div>
+        <h2 style={{ color: '#333', margin: '0' }}>Account Settings</h2>
+      </div>
+
+      {/* Settings Message */}
+      {settingsMessage && (
+        <div style={{
+          padding: '15px',
+          marginBottom: '20px',
+          backgroundColor: settingsMessage.includes('✅') ? '#f0fff4' : '#fed7d7',
+          border: `1px solid ${settingsMessage.includes('✅') ? '#9ae6b4' : '#feb2b2'}`,
+          borderRadius: '8px',
+          color: settingsMessage.includes('✅') ? '#276749' : '#c53030',
+          fontSize: '14px'
+        }}>
+          {settingsMessage}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gap: '30px' }}>
+        {/* Profile Information Section */}
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          padding: '30px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
+        }}>
+          <h3 style={{ 
+            color: '#2d3748', 
+            marginBottom: '20px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '10px' 
+          }}>
+            <span>👤</span>
+            Profile Information
+          </h3>
+          
+          <form onSubmit={handleProfileUpdate} style={{ display: 'grid', gap: '20px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  First Name
+                </label>
+                <input
+                  type="text"
+                  name="first_name"
+                  value={profileData.first_name}
+                  onChange={handleProfileChange}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                />
+              </div>
+              
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  Last Name
+                </label>
+                <input
+                  type="text"
+                  name="last_name"
+                  value={profileData.last_name}
+                  onChange={handleProfileChange}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                Email Address
+              </label>
+              <input
+                type="email"
+                name="email"
+                value={profileData.email}
+                onChange={handleProfileChange}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  backgroundColor: '#f8f9fa'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  Course/Program
+                </label>
+                <input
+                  type="text"
+                  name="course"
+                  value={profileData.course}
+                  onChange={handleProfileChange}
+                  placeholder="e.g. Computer Science"
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                />
+              </div>
+              
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  Year Level
+                </label>
+                <select
+                  name="year_level"
+                  value={profileData.year_level}
+                  onChange={handleProfileChange}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                >
+                  <option value="">Select Year Level</option>
+                  <option value="1st Year">1st Year</option>
+                  <option value="2nd Year">2nd Year</option>
+                  <option value="3rd Year">3rd Year</option>
+                  <option value="4th Year">4th Year</option>
+                  <option value="5th Year">5th Year</option>
+                  <option value="Graduate">Graduate</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                University
+              </label>
+              <input
+                type="text"
+                name="university"
+                value={profileData.university}
+                onChange={handleProfileChange}
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  backgroundColor: '#f8f9fa'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                disabled={isUpdatingProfile}
+                style={{
+                  padding: '12px 24px',
+                  backgroundColor: isUpdatingProfile ? '#ccc' : '#667eea',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  cursor: isUpdatingProfile ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px'
+                }}
+              >
+                <span>{isUpdatingProfile ? '⏳' : '💾'}</span>
+                {isUpdatingProfile ? 'Updating...' : 'Update Profile'}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Password Change Section */}
+        <div style={{
+          backgroundColor: 'white',
+          borderRadius: '12px',
+          padding: '30px',
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 4px 6px rgba(0, 0, 0, 0.05)'
+        }}>
+          <h3 style={{ 
+            color: '#2d3748', 
+            marginBottom: '20px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '10px' 
+          }}>
+            <span>🔒</span>
+            Change Password
+          </h3>
+          
+          <form onSubmit={handlePasswordChange_Submit} style={{ display: 'grid', gap: '20px' }}>
+            <div>
+              <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                Current Password
+              </label>
+              <input
+                type="password"
+                name="current_password"
+                value={passwordData.current_password}
+                onChange={handlePasswordChange}
+                required
+                style={{
+                  width: '100%',
+                  padding: '12px',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  backgroundColor: '#f8f9fa'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  New Password
+                </label>
+                <input
+                  type="password"
+                  name="new_password"
+                  value={passwordData.new_password}
+                  onChange={handlePasswordChange}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                />
+                <small style={{ color: '#718096', fontSize: '12px' }}>At least 6 characters</small>
+              </div>
+              
+              <div>
+                <label style={{ display: 'block', marginBottom: '8px', color: '#4a5568', fontWeight: '500' }}>
+                  Confirm New Password
+                </label>
+                <input
+                  type="password"
+                  name="confirm_password"
+                  value={passwordData.confirm_password}
+                  onChange={handlePasswordChange}
+                  required
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    fontSize: '16px',
+                    backgroundColor: '#f8f9fa'
+                  }}
+                />
+                <small style={{ color: '#718096', fontSize: '12px' }}>Must match new password</small>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                disabled={isChangingPassword}
+                style={{
+                  padding: '12px 24px',
+                  backgroundColor: isChangingPassword ? '#ccc' : '#e53e3e',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: '600',
+                  cursor: isChangingPassword ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px'
+                }}
+              >
+                <span>{isChangingPassword ? '⏳' : '🔐'}</span>
+                {isChangingPassword ? 'Changing...' : 'Change Password'}
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* Account Information */}
+        <div style={{
+          backgroundColor: '#f8f9ff',
+          borderRadius: '12px',
+          padding: '30px',
+          border: '1px solid #e2e8f0'
+        }}>
+          <h3 style={{ 
+            color: '#2d3748', 
+            marginBottom: '15px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '10px' 
+          }}>
+            <span>ℹ️</span>
+            Account Information
+          </h3>
+          
+          <div style={{ display: 'grid', gap: '10px', color: '#4a5568' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Username:</span>
+              <span style={{ fontWeight: '600' }}>{user?.username}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Student ID:</span>
+              <span style={{ fontWeight: '600' }}>{user?.student_profile?.student_id}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span>Account Created:</span>
+              <span style={{ fontWeight: '600' }}>
+                {user?.date_joined ? new Date(user.date_joined).toLocaleDateString() : 'N/A'}
+              </span>
+            </div>
+          </div>
+          
+          <div style={{
+            marginTop: '20px',
+            padding: '15px',
+            backgroundColor: '#fff3cd',
+            borderRadius: '8px',
+            border: '1px solid #ffeeba'
+          }}>
+            <p style={{ margin: '0', fontSize: '14px', color: '#856404' }}>
+              <strong>Note:</strong> Changes to your profile information may require admin review for certain scholarship applications. 
+              Contact support if you need to update your Student ID.
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 
@@ -1991,6 +2608,353 @@ function App() {
     );
   };
 
+  // Render Admin Students View
+  const renderAdminStudents = () => {
+    // Filter students based on search term and status
+    const filteredStudents = adminStudents.filter(student => {
+      const matchesSearch = studentsSearchTerm === '' || 
+        student.username.toLowerCase().includes(studentsSearchTerm.toLowerCase()) ||
+        student.email.toLowerCase().includes(studentsSearchTerm.toLowerCase()) ||
+        student.first_name.toLowerCase().includes(studentsSearchTerm.toLowerCase()) ||
+        student.last_name.toLowerCase().includes(studentsSearchTerm.toLowerCase()) ||
+        student.student_id.toLowerCase().includes(studentsSearchTerm.toLowerCase()) ||
+        student.course.toLowerCase().includes(studentsSearchTerm.toLowerCase());
+
+      const matchesFilter = studentsFilterStatus === 'all' ||
+        (studentsFilterStatus === 'active' && student.total_applications > 0) ||
+        (studentsFilterStatus === 'inactive' && student.total_applications === 0) ||
+        (studentsFilterStatus === 'first_time' && student.is_first_time_applicant);
+
+      return matchesSearch && matchesFilter;
+    });
+
+    return (
+      <div style={{ padding: '20px' }}>
+        {/* Header */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '15px',
+          marginBottom: '30px'
+        }}>
+          <div style={{
+            width: '40px',
+            height: '40px',
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '20px',
+            color: 'white'
+          }}>
+            👥
+          </div>
+          <h2 style={{ color: '#333', margin: '0' }}>Student Management</h2>
+          <button
+            onClick={() => setCurrentView('admin-dashboard')}
+            style={{
+              marginLeft: 'auto',
+              padding: '10px 20px',
+              backgroundColor: '#4a5568',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '600'
+            }}
+          >
+            ← Back to Dashboard
+          </button>
+        </div>
+
+        {/* Search and Filters */}
+        <div style={{
+          display: 'flex',
+          gap: '15px',
+          marginBottom: '25px',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          padding: '20px',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '12px',
+          border: '1px solid #e9ecef'
+        }}>
+          <div style={{ flex: 1, minWidth: '300px' }}>
+            <input
+              type="text"
+              placeholder="🔍 Search students by name, email, ID, or course..."
+              value={studentsSearchTerm}
+              onChange={(e) => setStudentsSearchTerm(e.target.value)}
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                border: '1px solid #dee2e6',
+                borderRadius: '8px',
+                fontSize: '14px',
+                outline: 'none',
+                transition: 'border-color 0.2s'
+              }}
+            />
+          </div>
+          <select
+            value={studentsFilterStatus}
+            onChange={(e) => setStudentsFilterStatus(e.target.value)}
+            style={{
+              padding: '12px 16px',
+              border: '1px solid #dee2e6',
+              borderRadius: '8px',
+              fontSize: '14px',
+              outline: 'none',
+              backgroundColor: 'white',
+              cursor: 'pointer'
+            }}
+          >
+            <option value="all">All Students</option>
+            <option value="active">Active (Has Applications)</option>
+            <option value="inactive">Inactive (No Applications)</option>
+            <option value="first_time">First-Time Applicants</option>
+          </select>
+          <div style={{
+            padding: '12px 16px',
+            backgroundColor: '#667eea',
+            color: 'white',
+            borderRadius: '8px',
+            fontSize: '14px',
+            fontWeight: '600'
+          }}>
+            {filteredStudents.length} Students
+          </div>
+        </div>
+
+        {/* Loading State */}
+        {adminStudentsLoading ? (
+          <div style={{
+            textAlign: 'center',
+            padding: '60px 20px',
+            backgroundColor: '#f8f9ff',
+            borderRadius: '12px',
+            border: '2px dashed #ccc'
+          }}>
+            <div style={{ fontSize: '48px', marginBottom: '20px' }}>⏳</div>
+            <h3 style={{ color: '#666', marginBottom: '10px' }}>Loading Students...</h3>
+            <p style={{ color: '#888' }}>Please wait while we fetch the student data.</p>
+          </div>
+        ) : filteredStudents.length === 0 ? (
+          <div style={{
+            textAlign: 'center',
+            padding: '60px 20px',
+            backgroundColor: '#f8f9ff',
+            borderRadius: '12px',
+            border: '2px dashed #ccc'
+          }}>
+            <div style={{ fontSize: '48px', marginBottom: '20px' }}>👥</div>
+            <h3 style={{ color: '#666', marginBottom: '10px' }}>
+              {studentsSearchTerm || studentsFilterStatus !== 'all' ? 'No Students Found' : 'No Students Registered'}
+            </h3>
+            <p style={{ color: '#888' }}>
+              {studentsSearchTerm || studentsFilterStatus !== 'all' 
+                ? 'Try adjusting your search or filter criteria.' 
+                : 'Students will appear here once they register for the scholarship system.'}
+            </p>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: '20px' }}>
+            {filteredStudents.map((student) => (
+              <div
+                key={student.user_id}
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '12px',
+                  padding: '24px',
+                  boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                  border: '1px solid #e5e5e5'
+                }}
+              >
+                {/* Student Header */}
+                <div style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  marginBottom: '16px'
+                }}>
+                  <div>
+                    <h3 style={{ color: '#333', margin: '0 0 8px 0', fontSize: '18px' }}>
+                      {student.first_name} {student.last_name}
+                    </h3>
+                    <p style={{ color: '#666', margin: '0', fontSize: '14px' }}>
+                      📧 {student.email} | 🆔 {student.student_id} | 👤 {student.username}
+                    </p>
+                    <p style={{ color: '#888', margin: '4px 0 0 0', fontSize: '12px' }}>
+                      Registered: {student.created_at ? new Date(student.created_at).toLocaleDateString() : 'N/A'}
+                    </p>
+                  </div>
+                  
+                  {/* Status Badges */}
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {student.is_first_time_applicant && (
+                      <span style={{
+                        padding: '4px 12px',
+                        borderRadius: '20px',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        backgroundColor: '#e6fffa',
+                        color: '#234e52',
+                        border: '2px solid #4fd1c7'
+                      }}>
+                        FIRST-TIME
+                      </span>
+                    )}
+                    <span style={{
+                      padding: '4px 12px',
+                      borderRadius: '20px',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                      backgroundColor: student.total_applications > 0 ? '#c6f6d5' : '#fed7d7',
+                      color: student.total_applications > 0 ? '#22543d' : '#742a2a',
+                      border: `2px solid ${student.total_applications > 0 ? '#68d391' : '#fc8181'}`
+                    }}>
+                      {student.total_applications > 0 ? 'ACTIVE' : 'INACTIVE'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Student Details */}
+                <div style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: '16px',
+                  marginBottom: '16px',
+                  padding: '16px',
+                  backgroundColor: '#f8f9fa',
+                  borderRadius: '8px'
+                }}>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>University:</strong>
+                    <p style={{ margin: '2px 0 0 0', color: '#333', fontSize: '14px', fontWeight: '600' }}>
+                      {student.university || 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>Course:</strong>
+                    <p style={{ margin: '2px 0 0 0', color: '#333', fontSize: '14px', fontWeight: '600' }}>
+                      {student.course || 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>Year Level:</strong>
+                    <p style={{ margin: '2px 0 0 0', color: '#333', fontSize: '14px', fontWeight: '600' }}>
+                      {student.year_level || 'N/A'}
+                    </p>
+                  </div>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>Applications:</strong>
+                    <p style={{ margin: '2px 0 0 0', color: '#333', fontSize: '14px', fontWeight: '600' }}>
+                      {student.total_applications || 0}
+                    </p>
+                  </div>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>Approved:</strong>
+                    <p style={{ margin: '2px 0 0 0', color: '#28a745', fontSize: '14px', fontWeight: '600' }}>
+                      {student.approved_applications || 0}
+                    </p>
+                  </div>
+                  <div>
+                    <strong style={{ color: '#555', fontSize: '12px' }}>Total Received:</strong>
+                    <p style={{ 
+                      margin: '2px 0 0 0', 
+                      color: '#28a745', 
+                      fontSize: '16px', 
+                      fontWeight: 'bold' 
+                    }}>
+                      ₱{student.total_allowance_received?.toLocaleString() || '0'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Last Application */}
+                {student.last_application && (
+                  <div style={{
+                    backgroundColor: '#f0f8ff',
+                    padding: '12px',
+                    borderRadius: '6px',
+                    marginBottom: '16px',
+                    border: '1px solid #bee3f8'
+                  }}>
+                    <h5 style={{ color: '#2b6cb0', margin: '0 0 4px 0', fontSize: '13px' }}>
+                      📅 Last Application:
+                    </h5>
+                    <p style={{ 
+                      color: '#3182ce', 
+                      margin: '0', 
+                      fontSize: '12px'
+                    }}>
+                      {new Date(student.last_application).toLocaleDateString()}
+                    </p>
+                  </div>
+                )}
+
+                {/* Action Buttons */}
+                <div style={{
+                  display: 'flex',
+                  gap: '10px',
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end'
+                }}>
+                  <button
+                    onClick={() => {
+                      setCurrentView('admin-applications');
+                      // Filter applications for this student
+                      setStudentsSearchTerm('');
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#4299e1',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onMouseOver={(e) => e.target.style.backgroundColor = '#3182ce'}
+                    onMouseOut={(e) => e.target.style.backgroundColor = '#4299e1'}
+                  >
+                    📋 View Applications
+                  </button>
+                  
+                  <button
+                    onClick={() => {
+                      // Open email client with pre-filled email
+                      window.open(`mailto:${student.email}?subject=TCU Scholarship System&body=Hello ${student.first_name},`);
+                    }}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#805ad5',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      fontWeight: '600',
+                      transition: 'all 0.3s ease'
+                    }}
+                    onMouseOver={(e) => e.target.style.backgroundColor = '#6b46c1'}
+                    onMouseOut={(e) => e.target.style.backgroundColor = '#805ad5'}
+                  >
+                    📧 Send Email
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // Handle status update
   const handleStatusUpdate = async (applicationId, newStatus) => {
     const buttonKey = `${applicationId}-${newStatus}`;
@@ -2336,7 +3300,7 @@ function App() {
             {/* Admin Content */}
             {currentView === 'admin-dashboard' && renderAdminDashboard()}
             {currentView === 'admin-applications' && renderAdminApplications()}
-            {currentView === 'admin-students' && <div>Admin Students View (Coming Soon)</div>}
+            {currentView === 'admin-students' && renderAdminStudents()}
           </div>
           <LogoutModal />
         </div>
@@ -2373,21 +3337,41 @@ function App() {
                   )}
                 </p>
               </div>
-              <button 
-                onClick={handleLogout}
-                style={{
-                  padding: '12px 24px',
-                  backgroundColor: '#e53e3e',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '16px',
-                  fontWeight: '500'
-                }}
-              >
-                Logout
-              </button>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <button 
+                  onClick={() => setCurrentView('settings')}
+                  style={{
+                    padding: '12px 24px',
+                    backgroundColor: '#667eea',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    fontWeight: '500',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}
+                >
+                  Settings
+                </button>
+                <button 
+                  onClick={handleLogout}
+                  style={{
+                    padding: '12px 24px',
+                    backgroundColor: '#e53e3e',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    fontSize: '16px',
+                    fontWeight: '500'
+                  }}
+                >
+                  Logout
+                </button>
+              </div>
             </div>
 
             {/* Student Navigation */}
@@ -2449,6 +3433,7 @@ function App() {
             {currentView === 'dashboard' && renderDashboard()}
             {currentView === 'apply' && renderGradeUpload()}
             {currentView === 'applications' && renderApplications()}
+            {currentView === 'settings' && renderSettings()}
           </div>
           <LogoutModal />
         </div>
